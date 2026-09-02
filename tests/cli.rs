@@ -12,7 +12,7 @@ use serde_json::{Value, json};
 use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Barrier};
 use std::thread;
 use tempfile::TempDir;
@@ -53,6 +53,18 @@ fn temp_has_git_ancestor(temp: &TempDir) -> bool {
     temp.path()
         .ancestors()
         .any(|ancestor| ancestor.join(".git").exists())
+}
+
+fn comparable_path(path: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let value = path.to_string_lossy();
+        PathBuf::from(value.strip_prefix(r"\\?\").unwrap_or(&value))
+    }
+    #[cfg(not(windows))]
+    {
+        path.to_path_buf()
+    }
 }
 
 fn success<T: DeserializeOwned>(output: &std::process::Output) -> SuccessEnvelope<T> {
@@ -1670,6 +1682,9 @@ fn structured_error_exit_matrix_and_help_exceptions() {
         .unwrap();
     error(&invalid_utf8, 65, "invalid_input");
     let directory_error = run_file(temp.path(), &["list"]);
+    #[cfg(windows)]
+    error(&directory_error, 77, "permission_denied");
+    #[cfg(not(windows))]
     error(&directory_error, 74, "io_error");
 
     let help = run(&["--help"]);
@@ -1988,8 +2003,8 @@ fn discovery_precedence_virtual_empty_and_git_file_root() {
     );
     let canonical_root = root.canonicalize().unwrap();
     assert_eq!(
-        walk.meta.file.as_deref(),
-        Some(canonical_root.join(".papercuts.jsonl").to_str().unwrap())
+        comparable_path(Path::new(walk.meta.file.as_deref().unwrap())),
+        comparable_path(&canonical_root.join(".papercuts.jsonl"))
     );
     let empty_env: SuccessEnvelope<AddData> = success(
         &command()
@@ -2220,11 +2235,10 @@ fn relative_file_resolves_against_cwd() {
         .output()
         .unwrap();
     let envelope: SuccessEnvelope<AddData> = success(&output);
-    let temp_canonical = temp.path().canonicalize().unwrap();
-    assert!(
-        Path::new(envelope.meta.file.as_deref().unwrap()).starts_with(&temp_canonical),
-        "meta.file = {:?}",
-        envelope.meta.file
+    let expected = temp.path().canonicalize().unwrap().join("rel/path.jsonl");
+    assert_eq!(
+        comparable_path(Path::new(envelope.meta.file.as_deref().unwrap())),
+        comparable_path(&expected)
     );
 }
 

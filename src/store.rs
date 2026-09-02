@@ -217,6 +217,13 @@ fn append_bytes_with(
         .metadata()
         .map_err(|error| AppError::from_io(error, path))?
         .len();
+    // Windows append handles deliberately lack FILE_WRITE_DATA, which set_len needs.
+    // Acquire rollback access before changing the file so a partial write remains reversible.
+    #[cfg(windows)]
+    let rollback_file = OpenOptions::new()
+        .write(true)
+        .open(path)
+        .map_err(|error| AppError::from_io(error, path))?;
     let mut bytes = Vec::new();
     if !prior.is_empty() && !prior.ends_with(b"\n") {
         bytes.push(b'\n');
@@ -224,7 +231,11 @@ fn append_bytes_with(
     bytes.extend_from_slice(record_bytes);
     // If the write fails, roll back to the pre-write length; if rollback also fails, surface both.
     if let Err(error) = write(file, &bytes) {
-        if let Err(rollback) = file.set_len(original_len) {
+        #[cfg(not(windows))]
+        let rollback = file.set_len(original_len);
+        #[cfg(windows)]
+        let rollback = rollback_file.set_len(original_len);
+        if let Err(rollback) = rollback {
             return Err(AppError {
                 code: "io_error",
                 message: format!(
@@ -411,6 +422,7 @@ mod tests {
         .unwrap_err();
 
         assert_eq!(error.code, "io_error");
+        assert!(!error.message.contains("rollback"));
         assert_eq!(std::fs::read(&path).unwrap(), original);
     }
 
