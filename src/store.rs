@@ -224,7 +224,7 @@ fn append_bytes_with(
     bytes.extend_from_slice(record_bytes);
     // If the write fails, roll back to the pre-write length; if rollback also fails, surface both.
     if let Err(error) = write(file, &bytes) {
-        if let Err(rollback) = file.set_len(original_len) {
+        if let Err(rollback) = truncate_to_len(file, path, original_len) {
             return Err(AppError {
                 code: "io_error",
                 message: format!(
@@ -239,6 +239,23 @@ fn append_bytes_with(
         return Err(AppError::from_io(error, path));
     }
     Ok(())
+}
+
+fn truncate_to_len(file: &mut File, path: &Path, len: u64) -> std::io::Result<()> {
+    // Windows: std append mode opens the handle with FILE_APPEND_DATA only, and
+    // SetEndOfFile needs FILE_WRITE_DATA, so set_len fails with Access Denied on
+    // the append handle. A separate write handle carries FILE_WRITE_DATA and
+    // truncates correctly; the caller's lock stays held on `file` throughout.
+    #[cfg(windows)]
+    {
+        let _ = file;
+        OpenOptions::new().write(true).open(path)?.set_len(len)
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = path;
+        file.set_len(len)
+    }
 }
 
 pub fn fold_bytes(bytes: &[u8]) -> FoldResult {

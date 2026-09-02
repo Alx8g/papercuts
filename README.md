@@ -38,6 +38,18 @@ papercuts doctor                # validate the log file
 - **Deterministic**: content-addressed IDs, stable sort, reproducible-clock override for tests.
 - **Never rewrites history**: `resolve` appends an event; the log is a journal, not a database.
 - **Evidence is bounded and redacted**: `add` can attach a failed command (`--cmd`), exit status (`--exit`), UTF-8 stderr file (`--stderr-file`), or free-form note (`--evidence`). `--stderr-file` rejects non-regular files and inputs over 1 MiB before sanitized stderr is stored up to 4096 UTF-8 bytes. Redaction is best-effort, so never feed raw environment dumps.
+- **Shell-safe text input**: backticks, `$()`, and quotes in papercut text are stored verbatim — the CLI never interprets them. The quoting risk is in your shell, not the tool: inline `"..."` strings run command substitution and history expansion. For text containing backticks, `$`, `"`, or `'`, pipe it instead of quoting it:
+
+```bash
+papercuts add - <<'EOF'
+`grep -rn "pattern" src/` matched stale bytecode and stopped before tests.
+EOF
+
+# or from a variable/program output:
+cat .working/tmp/note.txt | papercuts add -
+```
+
+Prefer a single-quoted heredoc (`<<'EOF'`) over inline double quotes whenever the text contains shell metacharacters. `add -` reads the whole pipe as the papercut text, so no shell in the loop can mangle it.
 
 ## Give your agents the pen
 

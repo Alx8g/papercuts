@@ -36,6 +36,23 @@ fn command() -> Command {
     command
 }
 
+/// The CLI reports plain (non-verbatim) paths, but `Path::canonicalize` on
+/// Windows returns verbatim `\\?\` paths, so normalize expected paths the
+/// same way before comparing.
+fn expect_path(path: &Path) -> String {
+    let text = path.to_str().unwrap().to_owned();
+    #[cfg(windows)]
+    {
+        text.strip_prefix(r"\\?\")
+            .map(str::to_owned)
+            .unwrap_or(text)
+    }
+    #[cfg(not(windows))]
+    {
+        text
+    }
+}
+
 fn run(args: &[&str]) -> std::process::Output {
     command().args(args).output().unwrap()
 }
@@ -1670,7 +1687,14 @@ fn structured_error_exit_matrix_and_help_exceptions() {
         .unwrap();
     error(&invalid_utf8, 65, "invalid_input");
     let directory_error = run_file(temp.path(), &["list"]);
-    error(&directory_error, 74, "io_error");
+    // Opening a directory as the papercuts file fails at open time on Windows
+    // (ERROR_ACCESS_DENIED → permission_denied) and at read time on Unix
+    // (EISDIR surfaced as io_error).
+    if cfg!(windows) {
+        error(&directory_error, 77, "permission_denied");
+    } else {
+        error(&directory_error, 74, "io_error");
+    }
 
     let help = run(&["--help"]);
     assert!(help.status.success());
@@ -1987,10 +2011,8 @@ fn discovery_precedence_virtual_empty_and_git_file_root() {
             .unwrap(),
     );
     let canonical_root = root.canonicalize().unwrap();
-    assert_eq!(
-        walk.meta.file.as_deref(),
-        Some(canonical_root.join(".papercuts.jsonl").to_str().unwrap())
-    );
+    let expected_root_file = expect_path(&canonical_root.join(".papercuts.jsonl"));
+    assert_eq!(walk.meta.file.as_deref(), Some(expected_root_file.as_str()));
     let empty_env: SuccessEnvelope<AddData> = success(
         &command()
             .current_dir(&nested)
@@ -2222,7 +2244,10 @@ fn relative_file_resolves_against_cwd() {
     let envelope: SuccessEnvelope<AddData> = success(&output);
     let temp_canonical = temp.path().canonicalize().unwrap();
     assert!(
-        Path::new(envelope.meta.file.as_deref().unwrap()).starts_with(&temp_canonical),
+        Path::new(&expect_path(Path::new(
+            envelope.meta.file.as_deref().unwrap()
+        )))
+        .starts_with(expect_path(&temp_canonical)),
         "meta.file = {:?}",
         envelope.meta.file
     );
